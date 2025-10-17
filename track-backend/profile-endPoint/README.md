@@ -74,4 +74,4 @@ npm install --save-dev nodemon
 - **Platform**: Deployed on Railway.
 - **Deployed URL**: [https://hng13-internship-production.up.railway.app](https://hng13-internship-production.up.railway.app/me)
 ## Environment Variables
-- `PORT`: Port for the server (default: deployed
+- `PORT`: Port for the server (default: 3000)
