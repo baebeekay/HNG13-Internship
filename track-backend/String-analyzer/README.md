@@ -25,4 +25,4 @@ A RESTful API for analyzing strings.
 Run: `npm test`
 
 ## Deployment
-Deployed on RailwaySQLithth PostgreSQL.
+Deployed on Railway with PostgreSQL.
