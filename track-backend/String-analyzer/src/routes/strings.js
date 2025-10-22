@@ -13,12 +13,16 @@ const calculateSHA256 = (str) => {
   return crypto.createHash('sha256').update(str).digest('hex');
 };
 
+
 // POST /strings
 router.post('/', async (req, res) => {
   try {
-    const { value } = req.body;
-    if (!value) return res.status(400).json({ error: 'Value field is required' });
+    let { value } = req.body;
+    if (value === undefined) return res.status(400).json({ error: 'Value field is required' });
     if (typeof value !== 'string') return res.status(400).json({ error: 'Value must be a string' });
+
+    // Ensure value is a string even if sent as number or object
+    value = value.toString();
 
     const existing = await String.findOne({ where: { value } });
     if (existing) return res.status(409).json({ error: 'String already exists' });
@@ -31,9 +35,15 @@ router.post('/', async (req, res) => {
     res.status(201).json(newString);
   } catch (error) {
     console.error('POST /strings error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    if (error instanceof SyntaxError) {
+      res.status(400).json({ error: 'Invalid JSON format' });
+    } else {
+      res.status(500).json({ error: 'Internal server error' });
+    }
   }
 });
+
+
 
 // GET /strings/{string_value}
 router.get('/:string_value', async (req, res) => {
