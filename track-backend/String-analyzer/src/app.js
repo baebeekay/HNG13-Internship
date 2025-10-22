@@ -1,21 +1,24 @@
 const express = require('express');
+const app = express();
 const stringsRouter = require('./routes/strings');
+const { Sequelize } = require('sequelize');
 const sequelize = require('./config/database');
 
-const app = express();
 app.use(express.json());
 app.use('/strings', stringsRouter);
 
-app.use((err, req, res, next) => {
-  res.status(500).json({ error: 'Internal server error' });
-});
-
-
+// Health check
+app.get('/', (req, res) => res.send('String Analyzer Service is running'));
 
 const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
   console.log(`Server running on port ${PORT}`);
+  try {
+    await sequelize.authenticate();
+    console.log('Database connection has been established successfully.');
+  } catch (error) {
+    console.error('Unable to connect to the database:', error);
+  }
 });
 
-module.exports = { app, sequelize };
+module.exports = app;
