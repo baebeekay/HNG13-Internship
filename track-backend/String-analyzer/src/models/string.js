@@ -1,11 +1,27 @@
+
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
 const String = sequelize.define('String', {
-  id: { type: DataTypes.STRING(64), primaryKey: true },
-  value: { type: DataTypes.TEXT, allowNull: false, unique: true },
-  properties: { type: DataTypes.JSONB, allowNull: false },
-  created_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
-}, { tableName: 'strings', timestamps: false });
+  value: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    unique: true
+  },
+  sha256Hash: {
+    type: DataTypes.STRING,
+    allowNull: false
+  },
+  isPalindrome: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false
+  },
+  length: {
+    type: DataTypes.INTEGER,
+    allowNull: false
+  }
+}, {
+  timestamps: true
+});
 
 module.exports = String;
