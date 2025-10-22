@@ -20,7 +20,7 @@ const String = sequelize.define('String', {
     allowNull: false
   }
 }, {
-  tableName: 'Strings', // Explicitly set table name to match case
+  tableName: 'Strings', // Ensure case matches database
   timestamps: true
 });
 
