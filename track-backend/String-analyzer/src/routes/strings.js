@@ -1,9 +1,10 @@
+
 const express = require('express');
 const router = express.Router();
 const String = require('../models/string');
 const crypto = require('crypto');
+const { Op } = require('sequelize');
 
-// Helper functions
 const isPalindrome = (str) => {
   const cleanStr = str.toLowerCase().replace(/[^a-zA-Z0-9]/g, '');
   return cleanStr === cleanStr.split('').reverse().join('');
@@ -13,16 +14,14 @@ const calculateSHA256 = (str) => {
   return crypto.createHash('sha256').update(str).digest('hex');
 };
 
-
 // POST /strings
 router.post('/', async (req, res) => {
   try {
-    let { value } = req.body;
-    if (value === undefined) return res.status(400).json({ error: 'Value field is required' });
+    const body = req.body;
+    if (typeof body !== 'object' || body === null) return res.status(400).json({ error: 'Invalid JSON format' });
+    const { value } = body;
+    if (!value) return res.status(400).json({ error: 'Value field is required' });
     if (typeof value !== 'string') return res.status(400).json({ error: 'Value must be a string' });
-
-    // Ensure value is a string even if sent as number or object
-    value = value.toString();
 
     const existing = await String.findOne({ where: { value } });
     if (existing) return res.status(409).json({ error: 'String already exists' });
@@ -32,18 +31,12 @@ router.post('/', async (req, res) => {
     const isPalindromeResult = isPalindrome(value);
 
     const newString = await String.create({ value, sha256Hash, length, isPalindrome: isPalindromeResult });
-    res.status(201).json(newString);
+    res.status(201).json({ data: newString });
   } catch (error) {
     console.error('POST /strings error:', error);
-    if (error instanceof SyntaxError) {
-      res.status(400).json({ error: 'Invalid JSON format' });
-    } else {
-      res.status(500).json({ error: 'Internal server error' });
-    }
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
-
-
 
 // GET /strings/{string_value}
 router.get('/:string_value', async (req, res) => {
@@ -51,7 +44,7 @@ router.get('/:string_value', async (req, res) => {
     const { string_value } = req.params;
     const string = await String.findOne({ where: { value: string_value } });
     if (!string) return res.status(404).json({ error: 'String not found' });
-    res.json(string);
+    res.json({ data: string });
   } catch (error) {
     console.error('GET /strings/:string_value error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -69,7 +62,7 @@ router.get('/', async (req, res) => {
     if (isPalindrome) where.isPalindrome = isPalindrome === 'true';
 
     const strings = await String.findAll({ where });
-    res.json(strings);
+    res.json({ data: strings }); // Wrap array in an object
   } catch (error) {
     console.error('GET /strings error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -92,9 +85,11 @@ router.get('/filter-by-natural-language', async (req, res) => {
     if (!langKeywords) return res.status(400).json({ error: 'Unsupported language' });
 
     const strings = await String.findAll({
-      where: sequelize.literal(`value LIKE '%${langKeywords[0]}%'`)
+      where: sequelize.where(sequelize.fn('LOWER', sequelize.col('value')), {
+        [Op.like]: `%${langKeywords[0].toLowerCase()}%`
+      })
     });
-    res.json(strings);
+    res.json({ data: strings }); // Wrap array in an object
   } catch (error) {
     console.error('GET /filter-by-natural-language error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -115,4 +110,4 @@ router.delete('/:string_value', async (req, res) => {
 });
 
 module.exports = router;
-    
+
