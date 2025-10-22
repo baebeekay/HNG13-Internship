@@ -1,4 +1,3 @@
-
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/database');
 
@@ -21,6 +20,7 @@ const String = sequelize.define('String', {
     allowNull: false
   }
 }, {
+  tableName: 'Strings', // Explicitly set table name to match case
   timestamps: true
 });
 
