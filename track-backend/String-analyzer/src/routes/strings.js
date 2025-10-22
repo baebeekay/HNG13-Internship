@@ -1,158 +1,108 @@
 const express = require('express');
-const { analyzeString } = require('../services/stringService');
-const String = require('../models/string');
-const { parseNaturalLanguageQuery } = require('../utils/naturalLanguage');
-
 const router = express.Router();
+const String = require('../models/string');
+const crypto = require('crypto');
+
+// Helper functions
+const isPalindrome = (str) => {
+  const cleanStr = str.toLowerCase().replace(/[^a-zA-Z0-9]/g, '');
+  return cleanStr === cleanStr.split('').reverse().join('');
+};
+
+const calculateSHA256 = (str) => {
+  return crypto.createHash('sha256').update(str).digest('hex');
+};
 
 // POST /strings
 router.post('/', async (req, res) => {
-  const { value } = req.body;
-  if (!value || typeof value !== 'string') {
-    return res.status(400).json({ error: 'Invalid request body or missing "value" field' });
-  }
-
   try {
+    const { value } = req.body;
+    if (!value) return res.status(400).json({ error: 'Value field is required' });
+    if (typeof value !== 'string') return res.status(400).json({ error: 'Value must be a string' });
+
     const existing = await String.findOne({ where: { value } });
-    if (existing) {
-      return res.status(409).json({ error: 'String already exists' });
-    }
+    if (existing) return res.status(409).json({ error: 'String already exists' });
 
-    const properties = analyzeString(value);
-    const string = await String.create({
-      id: properties.sha256_hash,
-      value,
-      properties,
-    });
+    const sha256Hash = calculateSHA256(value);
+    const length = value.length;
+    const isPalindromeResult = isPalindrome(value);
 
-    res.status(201).json({
-      id: string.id,
-      value: string.value,
-      properties: string.properties,
-      created_at: string.created_at,
-    });
+    const newString = await String.create({ value, sha256Hash, length, isPalindrome: isPalindromeResult });
+    res.status(201).json(newString);
   } catch (error) {
-    if (error.message === 'Input must be a string') {
-      return res.status(422).json({ error: 'Invalid data type for "value"' });
-    }
-    throw error;
+    console.error('POST /strings error:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // GET /strings/{string_value}
-router.get('/:stringValue', async (req, res) => {
-  const string = await String.findOne({ where: { value: req.params.stringValue } });
-  if (!string) {
-    return res.status(404).json({ error: 'String not found' });
+router.get('/:string_value', async (req, res) => {
+  try {
+    const { string_value } = req.params;
+    const string = await String.findOne({ where: { value: string_value } });
+    if (!string) return res.status(404).json({ error: 'String not found' });
+    res.json(string);
+  } catch (error) {
+    console.error('GET /strings/:string_value error:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
-
-  res.status(200).json({
-    id: string.id,
-    value: string.value,
-    properties: string.properties,
-    created_at: string.created_at,
-  });
 });
 
-// GET /strings (with filtering)
+// GET /strings with filters
 router.get('/', async (req, res) => {
-  const { is_palindrome, min_length, max_length, word_count, contains_character } = req.query;
+  try {
+    const { minLength, maxLength, isPalindrome } = req.query;
+    let where = {};
 
-  if (contains_character && contains_character.length !== 1) {
-    return res.status(400).json({ error: 'contains_character must be a single character' });
-  }
+    if (minLength) where.length = { [Op.gte]: parseInt(minLength) };
+    if (maxLength) where.length = { ...where.length, [Op.lte]: parseInt(maxLength) };
+    if (isPalindrome) where.isPalindrome = isPalindrome === 'true';
 
-  const where = {};
-  if (is_palindrome !== undefined) {
-    where['properties.is_palindrome'] = is_palindrome === 'true';
+    const strings = await String.findAll({ where });
+    res.json(strings);
+  } catch (error) {
+    console.error('GET /strings error:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
-  if (min_length !== undefined) {
-    where['properties.length'] = { [Op.gte]: parseInt(min_length) };
-  }
-  if (max_length !== undefined) {
-    where['properties.length'] = { ...where['properties.length'], [Op.lte]: parseInt(max_length) };
-  }
-  if (word_count !== undefined) {
-    where['properties.word_count'] = parseInt(word_count);
-  }
-  if (contains_character) {
-    where.value = { [Op.like]: `%${contains_character}%` };
-  }
-
-  const strings = await String.findAll({ where });
-
-  res.status(200).json({
-    data: strings.map(s => ({
-      id: s.id,
-      value: s.value,
-      properties: s.properties,
-      created_at: s.created_at,
-    })),
-    count: strings.length,
-    filters_applied: {
-      is_palindrome: is_palindrome ? is_palindrome === 'true' : undefined,
-      min_length: min_length ? parseInt(min_length) : undefined,
-      max_length: max_length ? parseInt(max_length) : undefined,
-      word_count: word_count ? parseInt(word_count) : undefined,
-      contains_character,
-    },
-  });
 });
 
 // GET /strings/filter-by-natural-language
 router.get('/filter-by-natural-language', async (req, res) => {
-  const { query } = req.query;
-  if (!query) {
-    return res.status(400).json({ error: 'Missing query parameter' });
-  }
-
-  let filters;
   try {
-    filters = parseNaturalLanguageQuery(query);
+    const { language } = req.query;
+    if (!language) return res.status(400).json({ error: 'Language query parameter is required' });
+
+    const keywords = {
+      english: ['the', 'is', 'and'],
+      spanish: ['el', 'es', 'y'],
+      french: ['le', 'est', 'et']
+    };
+
+    const langKeywords = keywords[language.toLowerCase()];
+    if (!langKeywords) return res.status(400).json({ error: 'Unsupported language' });
+
+    const strings = await String.findAll({
+      where: sequelize.literal(`value LIKE '%${langKeywords[0]}%'`)
+    });
+    res.json(strings);
   } catch (error) {
-    return res.status(400).json({ error: 'Unable to parse natural language query' });
+    console.error('GET /filter-by-natural-language error:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
-
-  const where = {};
-  if (filters.is_palindrome !== undefined) {
-    where['properties.is_palindrome'] = filters.is_palindrome;
-  }
-  if (filters.min_length !== undefined) {
-    where['properties.length'] = { [Op.gte]: filters.min_length };
-  }
-  if (filters.word_count !== undefined) {
-    where['properties.word_count'] = filters.word_count;
-  }
-  if (filters.contains_character) {
-    where.value = { [Op.like]: `%${filters.contains_character}%` };
-  }
-
-  const strings = await String.findAll({ where });
-
-  res.status(200).json({
-    data: strings.map(s => ({
-      id: s.id,
-      value: s.value,
-      properties: s.properties,
-      created_at: s.created_at,
-    })),
-    count: strings.length,
-    interpreted_query: {
-      original: query,
-      parsed_filters: filters,
-    },
-  });
 });
 
 // DELETE /strings/{string_value}
-router.delete('/:stringValue', async (req, res) => {
-  const string = await String.findOne({ where: { value: req.params.stringValue } });
-  if (!string) {
-    return res.status(404).json({ error: 'String not found' });
+router.delete('/:string_value', async (req, res) => {
+  try {
+    const { string_value } = req.params;
+    const deleted = await String.destroy({ where: { value: string_value } });
+    if (deleted === 0) return res.status(404).json({ error: 'String not found' });
+    res.status(204).send();
+  } catch (error) {
+    console.error('DELETE /strings/:string_value error:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
-
-  await string.destroy();
-  res.status(204).send();
 });
 
 module.exports = router;
+    
