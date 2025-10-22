@@ -2,8 +2,9 @@ const express = require('express');
 const router = express.Router();
 const String = require('../models/string');
 const crypto = require('crypto');
-const { Op, Sequelize } = require('sequelize'); // Import Sequelize for raw queries
+const { Op, Sequelize } = require('sequelize');
 
+// Helper functions (unchanged)
 const isPalindrome = (str) => {
   const cleanStr = str.toLowerCase().replace(/[^a-zA-Z0-9]/g, '');
   return cleanStr === cleanStr.split('').reverse().join('');
@@ -37,6 +38,36 @@ router.post('/', async (req, res) => {
   }
 });
 
+// GET /strings/filter-by-natural-language
+router.get('/filter-by-natural-language', async (req, res) => {
+  try {
+    const { language } = req.query;
+    if (!language) return res.status(400).json({ error: 'Language query parameter is required' });
+
+    const keywords = {
+      english: ['the', 'is', 'and'],
+      spanish: ['el', 'es', 'y'],
+      french: ['le', 'est', 'et']
+    };
+
+    const langKeywords = keywords[language.toLowerCase()];
+    if (!langKeywords) return res.status(400).json({ error: 'Unsupported language' });
+
+    const conditions = langKeywords.map(keyword => ({
+      [Op.like]: `%${keyword.toLowerCase()}%`
+    }));
+    const whereClause = Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('value')), {
+      [Op.or]: conditions
+    });
+
+    const strings = await String.findAll({ where: whereClause });
+    res.json({ data: strings });
+  } catch (error) {
+    console.error('GET /filter-by-natural-language error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // GET /strings/{string_value}
 router.get('/:string_value', async (req, res) => {
   try {
@@ -64,37 +95,6 @@ router.get('/', async (req, res) => {
     res.json({ data: strings });
   } catch (error) {
     console.error('GET /strings error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// GET /strings/filter-by-natural-language
-router.get('/filter-by-natural-language', async (req, res) => {
-  try {
-    const { language } = req.query;
-    if (!language) return res.status(400).json({ error: 'Language query parameter is required' });
-
-    const keywords = {
-      english: ['the', 'is', 'and'],
-      spanish: ['el', 'es', 'y'],
-      french: ['le', 'est', 'et']
-    };
-
-    const langKeywords = keywords[language.toLowerCase()];
-    if (!langKeywords) return res.status(400).json({ error: 'Unsupported language' });
-
-    // Use Sequelize.or to check for any keyword
-    const conditions = langKeywords.map(keyword => ({
-      [Op.like]: `%${keyword.toLowerCase()}%`
-    }));
-    const whereClause = Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('value')), {
-      [Op.or]: conditions
-    });
-
-    const strings = await String.findAll({ where: whereClause });
-    res.json({ data: strings });
-  } catch (error) {
-    console.error('GET /filter-by-natural-language error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
