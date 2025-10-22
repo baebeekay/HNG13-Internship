@@ -1,3 +1,13 @@
 const { Sequelize } = require('sequelize');
-const sequelize = new Sequelize(process.env.DATABASE_URL, { dialect: 'postgres', logging: false });
+
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) {
+  throw new Error('DATABASE_URL environment variable is not set');
+}
+
+const sequelize = new Sequelize(databaseUrl, {
+  dialect: 'postgres',
+  logging: false,
+});
+
 module.exports = sequelize;
