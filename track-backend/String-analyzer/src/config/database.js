@@ -1,31 +1,21 @@
 const { Sequelize } = require('sequelize');
 
-// Load environment variables
-require('dotenv').config();
+console.log('All Environment Variables:', JSON.stringify(process.env, null, 2));
 
-const sequelize = new Sequelize(process.env.DATABASE_URL, {
-  dialect: 'postgres', // Adjust if using MySQL, SQLite, etc.
-  logging: process.env.NODE_ENV === 'development' ? console.log : false, // Log SQL in development
-  define: {
-    timestamps: true, // Ensures createdAt and updatedAt are managed
-    underscored: false, // Use camelCase (matches your model)
-  },
-  pool: {
-    max: 5,
-    min: 0,
-    acquire: 30000,
-    idle: 10000,
-  },
-});
-
-// Test the connection
-(async () => {
-  try {
-    await sequelize.authenticate();
-    console.log('Database connection has been established successfully.');
-  } catch (error) {
-    console.error('Unable to connect to the database:', error);
+let sequelize;
+try {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    throw new Error('DATABASE_URL environment variable is not set');
   }
-})();
+  sequelize = new Sequelize(databaseUrl, { 
+    dialect: 'postgres', 
+    logging: console.log 
+  });
+  console.log('Database connection established');
+} catch (error) {
+  console.error('Database connection failed:', error);
+  process.exit(1);
+}
 
 module.exports = sequelize;
