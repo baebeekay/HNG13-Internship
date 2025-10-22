@@ -6,8 +6,10 @@ function parseNaturalLanguageQuery(query) {
   // Parse specific query patterns
   if (lowerQuery.includes('single word')) filters.word_count = 1;
   if (lowerQuery.includes('palindromic') || lowerQuery.includes('palindrome')) filters.is_palindrome = true;
-  const lengthMatch = lowerQuery.match(/longer than (\d+)/);
-  if (lengthMatch) filters.min_length = parseInt(lengthMatch[1]) + 1;
+  const minLengthMatch = lowerQuery.match(/longer than (\d+)/);
+  if (minLengthMatch) filters.min_length = parseInt(minLengthMatch[1]) + 1;
+  const maxLengthMatch = lowerQuery.match(/shorter than (\d+)/);
+  if (maxLengthMatch) filters.max_length = parseInt(maxLengthMatch[1]) - 1;
   const charMatch = lowerQuery.match(/containing the letter (\w)/);
   if (charMatch && charMatch[1].length === 1) filters.contains_character = charMatch[1].toLowerCase();
   if (lowerQuery.includes('first vowel')) filters.contains_character = 'a';
