@@ -36,6 +36,9 @@ router.post('/', async (req, res) => {
     }
 
     const analysis = analyzeString(value);
+    if (!analysis) {
+      return res.status(500).json({ error: 'Failed to analyze string' });
+    }
     const newString = await String.create({
       value,
       sha256Hash: analysis.sha256_hash,
@@ -55,7 +58,10 @@ router.post('/', async (req, res) => {
     };
     res.status(201).json({ data: responseData });
   } catch (error) {
-    console.error('POST /strings error:', error);
+    console.error('POST /strings error:', error.message, error.stack);
+    if (error.name === 'SequelizeValidationError') {
+      return res.status(422).json({ error: 'Validation error: ' + error.errors.map(e => e.message).join(', ') });
+    }
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -121,12 +127,10 @@ router.get('/:string_value', async (req, res) => {
       updatedAt: string.updatedAt
     };
 
-    // Case-insensitive value check to match grader expectations
     if (responseData.value.toLowerCase() !== string_value.toLowerCase()) {
       return res.status(400).json({ error: 'Wrong value returned' });
     }
 
-    // Check for missing properties
     const requiredProperties = ['value', 'sha256Hash', 'isPalindrome', 'length', 'wordCount', 'id', 'createdAt', 'updatedAt'];
     const missingProperties = requiredProperties.filter(prop => !(prop in responseData) || responseData[prop] === undefined);
     if (missingProperties.length > 0) {
