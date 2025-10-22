@@ -23,28 +23,29 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Invalid request body or missing "value" field' });
     }
     const { value } = body;
-    if (!value) {
+    if (!value || value.trim() === '') {
       return res.status(400).json({ error: 'Invalid request body or missing "value" field' });
     }
     if (typeof value !== 'string') {
       return res.status(422).json({ error: 'Invalid data type for "value" (must be string)' });
     }
 
-    const existing = await String.findOne({ where: { value } });
+    const existing = await String.findOne({ where: { value: value.trim() } });
     if (existing) {
       return res.status(409).json({ error: 'String already exists in the system' });
     }
 
-    const analysis = analyzeString(value);
-    if (!analysis) {
+    const analysis = analyzeString(value.trim());
+    if (!analysis || typeof analysis !== 'object') {
       return res.status(500).json({ error: 'Failed to analyze string' });
     }
+
     const newString = await String.create({
-      value,
+      value: value.trim(),
       sha256Hash: analysis.sha256_hash,
       isPalindrome: analysis.is_palindrome,
       length: analysis.length,
-      wordCount: analysis.word_count
+      wordCount: analysis.word_count || 0
     });
     const responseData = {
       value: newString.value,
