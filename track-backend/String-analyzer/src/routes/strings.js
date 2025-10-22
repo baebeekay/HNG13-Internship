@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const String = require('../models/string');
 const crypto = require('crypto');
-const { Op } = require('sequelize');
+const { Op, Sequelize } = require('sequelize'); // Import Sequelize for raw queries
 
 const isPalindrome = (str) => {
   const cleanStr = str.toLowerCase().replace(/[^a-zA-Z0-9]/g, '');
@@ -83,11 +83,15 @@ router.get('/filter-by-natural-language', async (req, res) => {
     const langKeywords = keywords[language.toLowerCase()];
     if (!langKeywords) return res.status(400).json({ error: 'Unsupported language' });
 
-    const strings = await String.findAll({
-      where: sequelize.where(sequelize.fn('LOWER', sequelize.col('value')), {
-        [Op.like]: `%${langKeywords[0].toLowerCase()}%`
-      })
+    // Use Sequelize.or to check for any keyword
+    const conditions = langKeywords.map(keyword => ({
+      [Op.like]: `%${keyword.toLowerCase()}%`
+    }));
+    const whereClause = Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('value')), {
+      [Op.or]: conditions
     });
+
+    const strings = await String.findAll({ where: whereClause });
     res.json({ data: strings });
   } catch (error) {
     console.error('GET /filter-by-natural-language error:', error);
