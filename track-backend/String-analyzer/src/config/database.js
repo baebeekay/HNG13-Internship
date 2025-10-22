@@ -1,21 +1,31 @@
-const { Pool } = require('pg');
+const { Sequelize } = require('sequelize');
+
+// Load environment variables
 require('dotenv').config();
 
-const pool = new Pool({
-  host: process.env.PG_HOST,
-  port: process.env.PG_PORT,
-  database: process.env.PG_DATABASE,
-  user: process.env.PG_USER,
-  password: process.env.PG_PASSWORD,
+const sequelize = new Sequelize(process.env.DATABASE_URL, {
+  dialect: 'postgres', // Adjust if using MySQL, SQLite, etc.
+  logging: process.env.NODE_ENV === 'development' ? console.log : false, // Log SQL in development
+  define: {
+    timestamps: true, // Ensures createdAt and updatedAt are managed
+    underscored: false, // Use camelCase (matches your model)
+  },
+  pool: {
+    max: 5,
+    min: 0,
+    acquire: 30000,
+    idle: 10000,
+  },
 });
 
-pool.on('connect', () => {
-  console.log('Connected to PostgreSQL');
-});
+// Test the connection
+(async () => {
+  try {
+    await sequelize.authenticate();
+    console.log('Database connection has been established successfully.');
+  } catch (error) {
+    console.error('Unable to connect to the database:', error);
+  }
+})();
 
-pool.on('error', (err) => {
-  console.error('PostgreSQL connection error:', err);
-  process.exit(1);
-});
-
-module.exports = pool;
+module.exports = sequelize;
