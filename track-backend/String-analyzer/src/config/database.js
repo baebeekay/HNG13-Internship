@@ -1,21 +1,21 @@
-const { Sequelize } = require('sequelize');
+const { Pool } = require('pg');
+require('dotenv').config();
 
-console.log('All Environment Variables:', JSON.stringify(process.env, null, 2));
+const pool = new Pool({
+  host: process.env.PG_HOST,
+  port: process.env.PG_PORT,
+  database: process.env.PG_DATABASE,
+  user: process.env.PG_USER,
+  password: process.env.PG_PASSWORD,
+});
 
-let sequelize;
-try {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error('DATABASE_URL environment variable is not set');
-  }
-  sequelize = new Sequelize(databaseUrl, { 
-    dialect: 'postgres', 
-    logging: console.log 
-  });
-  console.log('Database connection established');
-} catch (error) {
-  console.error('Database connection failed:', error);
+pool.on('connect', () => {
+  console.log('Connected to PostgreSQL');
+});
+
+pool.on('error', (err) => {
+  console.error('PostgreSQL connection error:', err);
   process.exit(1);
-}
+});
 
-module.exports = sequelize;
+module.exports = pool;
