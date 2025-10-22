@@ -1,4 +1,3 @@
-
 const express = require('express');
 const router = express.Router();
 const String = require('../models/string');
@@ -57,12 +56,12 @@ router.get('/', async (req, res) => {
     const { minLength, maxLength, isPalindrome } = req.query;
     let where = {};
 
-    if (minLength) where.length = { [Op.gte]: parseInt(minLength) };
+    if (minLength) where.length = { ...where.length, [Op.gte]: parseInt(minLength) };
     if (maxLength) where.length = { ...where.length, [Op.lte]: parseInt(maxLength) };
-    if (isPalindrome) where.isPalindrome = isPalindrome === 'true';
+    if (isPalindrome !== undefined) where.isPalindrome = isPalindrome === 'true';
 
     const strings = await String.findAll({ where });
-    res.json({ data: strings }); // Wrap array in an object
+    res.json({ data: strings });
   } catch (error) {
     console.error('GET /strings error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -89,7 +88,7 @@ router.get('/filter-by-natural-language', async (req, res) => {
         [Op.like]: `%${langKeywords[0].toLowerCase()}%`
       })
     });
-    res.json({ data: strings }); // Wrap array in an object
+    res.json({ data: strings });
   } catch (error) {
     console.error('GET /filter-by-natural-language error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -110,4 +109,3 @@ router.delete('/:string_value', async (req, res) => {
 });
 
 module.exports = router;
-
