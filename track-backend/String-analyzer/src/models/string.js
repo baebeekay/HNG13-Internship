@@ -6,7 +6,7 @@ const String = sequelize.define('String', {
   sha256Hash: { type: DataTypes.STRING, allowNull: false },
   isPalindrome: { type: DataTypes.BOOLEAN, allowNull: false },
   length: { type: DataTypes.INTEGER, allowNull: false },
-  wordCount: { type: DataTypes.INTEGER, allowNull: false } // New field
+  wordCount: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 }
 }, {
   tableName: 'Strings',
   timestamps: true
