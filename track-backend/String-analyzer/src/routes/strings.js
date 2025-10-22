@@ -4,7 +4,7 @@ const String = require('../models/string');
 const crypto = require('crypto');
 const { Op, Sequelize } = require('sequelize');
 
-// Helper functions (unchanged)
+// Helper functions
 const isPalindrome = (str) => {
   const cleanStr = str.toLowerCase().replace(/[^a-zA-Z0-9]/g, '');
   return cleanStr === cleanStr.split('').reverse().join('');
@@ -31,7 +31,16 @@ router.post('/', async (req, res) => {
     const isPalindromeResult = isPalindrome(value);
 
     const newString = await String.create({ value, sha256Hash, length, isPalindrome: isPalindromeResult });
-    res.status(201).json({ data: newString });
+    const responseData = {
+      value: newString.value,
+      sha256Hash: newString.sha256Hash,
+      isPalindrome: newString.isPalindrome,
+      length: newString.length,
+      id: newString.id,
+      createdAt: newString.createdAt,
+      updatedAt: newString.updatedAt
+    };
+    res.status(201).json({ data: responseData });
   } catch (error) {
     console.error('POST /strings error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -61,7 +70,16 @@ router.get('/filter-by-natural-language', async (req, res) => {
     });
 
     const strings = await String.findAll({ where: whereClause });
-    res.json({ data: strings });
+    const responseData = strings.map(string => ({
+      value: string.value,
+      sha256Hash: string.sha256Hash,
+      isPalindrome: string.isPalindrome,
+      length: string.length,
+      id: string.id,
+      createdAt: string.createdAt,
+      updatedAt: string.updatedAt
+    }));
+    res.json({ data: responseData });
   } catch (error) {
     console.error('GET /filter-by-natural-language error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -74,7 +92,16 @@ router.get('/:string_value', async (req, res) => {
     const { string_value } = req.params;
     const string = await String.findOne({ where: { value: string_value } });
     if (!string) return res.status(404).json({ error: 'String not found' });
-    res.json({ data: string });
+    const responseData = {
+      value: string.value,
+      sha256Hash: string.sha256Hash,
+      isPalindrome: string.isPalindrome,
+      length: string.length,
+      id: string.id,
+      createdAt: string.createdAt,
+      updatedAt: string.updatedAt
+    };
+    res.json({ data: responseData });
   } catch (error) {
     console.error('GET /strings/:string_value error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -87,12 +114,21 @@ router.get('/', async (req, res) => {
     const { minLength, maxLength, isPalindrome } = req.query;
     let where = {};
 
-    if (minLength) where.length = { ...where.length, [Op.gte]: parseInt(minLength) };
-    if (maxLength) where.length = { ...where.length, [Op.lte]: parseInt(maxLength) };
+    if (minLength) where.length = { ...where.length, [Op.gte]: parseInt(minLength) || 0 };
+    if (maxLength) where.length = { ...where.length, [Op.lte]: parseInt(maxLength) || Infinity };
     if (isPalindrome !== undefined) where.isPalindrome = isPalindrome === 'true';
 
     const strings = await String.findAll({ where });
-    res.json({ data: strings });
+    const responseData = strings.map(string => ({
+      value: string.value,
+      sha256Hash: string.sha256Hash,
+      isPalindrome: string.isPalindrome,
+      length: string.length,
+      id: string.id,
+      createdAt: string.createdAt,
+      updatedAt: string.updatedAt
+    }));
+    res.json({ data: responseData });
   } catch (error) {
     console.error('GET /strings error:', error);
     res.status(500).json({ error: 'Internal server error' });
