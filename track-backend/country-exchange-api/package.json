@@ -1,0 +1,19 @@
+{
+  "name": "country-exchange-api",
+  "version": "1.0.0",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "nodemon app.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.12.0",
+    "axios": "^1.7.7",
+    "dotenv": "^16.4.5",
+    "jimp": "^0.22.12"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7"
+  }
+}
