@@ -12,15 +12,46 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// PostgreSQL Pool from Railway
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false // Required for Railway
-  }
-});
+// ========================================
+// DATABASE CONNECTION (Railway-Ready)
+// ========================================
+let pool;
 
-// Initialize DB Table
+try {
+  if (!process.env.DATABASE_URL) {
+    throw new Error('DATABASE_URL is not set. Add it in Railway variables as ${{Postgres.DATABASE_URL}}');
+  }
+
+  pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+      rejectUnauthorized: false // Required for Railway
+    },
+    connectionTimeoutMillis: 5000,
+    max: 10,
+    idleTimeoutMillis: 30000
+  });
+
+  console.log('PostgreSQL pool created successfully');
+} catch (err) {
+  console.error('Failed to create DB pool:', err.message);
+  process.exit(1);
+}
+
+// Test connection on startup
+(async () => {
+  try {
+    const client = await pool.connect();
+    console.log('Connected to PostgreSQL');
+    client.release();
+  } catch (err) {
+    console.error('DB connection failed:', err.message);
+  }
+})();
+
+// ========================================
+// DATABASE INITIALIZATION
+// ========================================
 async function initDB() {
   const createTableSQL = `
     CREATE TABLE IF NOT EXISTS countries (
@@ -38,43 +69,50 @@ async function initDB() {
       CONSTRAINT unique_name_lower UNIQUE (name_lower)
     );
 
-    CREATE INDEX IF NOT EXISTS idx_countries_region ON countries(region);
-    CREATE INDEX IF NOT EXISTS idx_countries_currency ON countries(currency_code);
-    CREATE INDEX IF NOT EXISTS idx_countries_gdp ON countries(estimated_gdp DESC NULLS LAST);
+    CREATE INDEX IF NOT EXISTS idx_region ON countries(region);
+    CREATE INDEX IF NOT EXISTS idx_currency ON countries(currency_code);
+    CREATE INDEX IF NOT EXISTS idx_gdp ON countries(estimated_gdp DESC NULLS LAST);
   `;
 
   try {
     await pool.query(createTableSQL);
-    console.log('PostgreSQL table and indexes ready.');
+    console.log('Table "countries" and indexes ready');
   } catch (err) {
-    console.error('DB Init Error:', err);
-    process.exit(1);
+    console.error('DB Init Error:', err.message);
   }
 }
 
 initDB();
 
-// Cache directory
+// ========================================
+// CACHE & IMAGE SETUP
+// ========================================
 const CACHE_DIR = path.join(__dirname, 'cache');
 const IMAGE_PATH = path.join(CACHE_DIR, 'summary.png');
 
 (async () => {
-  await fs.mkdir(CACHE_DIR, { recursive: true });
+  try {
+    await fs.mkdir(CACHE_DIR, { recursive: true });
+    console.log('Cache directory ready');
+  } catch (err) {
+    console.error('Failed to create cache dir:', err);
+  }
 })();
 
-// Helper: Random multiplier (1000–2000)
-function getRandomMultiplier() {
-  return Math.random() * 1000 + 1000;
-}
+// Helper: Random multiplier 1000–2000
+const getRandomMultiplier = () => Math.random() * 1000 + 1000;
 
+// ========================================
 // POST /countries/refresh
+// ========================================
 app.post('/countries/refresh', async (req, res) => {
   let countriesData, ratesData;
 
   // 1. Fetch countries
   try {
     const resp = await axios.get(
-      'https://restcountries.com/v2/all?fields=name,capital,region,population,flag,currencies'
+      'https://restcountries.com/v2/all?fields=name,capital,region,population,flag,currencies',
+      { timeout: 10000 }
     );
     countriesData = resp.data;
   } catch (err) {
@@ -86,8 +124,8 @@ app.post('/countries/refresh', async (req, res) => {
 
   // 2. Fetch exchange rates
   try {
-    const resp = await axios.get('https://open.er-api.com/v6/latest/USD');
-    if (!resp.data.rates) throw new Error('Invalid rates data');
+    const resp = await axios.get('https://open.er-api.com/v6/latest/USD', { timeout: 10000 });
+    if (!resp.data.rates) throw new Error('Invalid rates');
     ratesData = resp.data.rates;
   } catch (err) {
     return res.status(503).json({
@@ -97,12 +135,10 @@ app.post('/countries/refresh', async (req, res) => {
   }
 
   const now = new Date();
-  const timestamp = now.toISOString();
 
   try {
     for (const country of countriesData) {
       const { name, capital, region, population, flag, currencies } = country;
-
       if (!name || population == null) continue;
 
       let currency_code = null;
@@ -110,17 +146,13 @@ app.post('/countries/refresh', async (req, res) => {
       let estimated_gdp = 0;
 
       if (currencies && Array.isArray(currencies) && currencies.length > 0) {
-        const firstCurrency = currencies[0];
-        currency_code = firstCurrency.code || null;
-
+        currency_code = currencies[0].code || null;
         if (currency_code && ratesData[currency_code]) {
           exchange_rate = parseFloat(ratesData[currency_code]);
-          const multiplier = getRandomMultiplier();
-          estimated_gdp = (population * multiplier) / exchange_rate;
+          estimated_gdp = (population * getRandomMultiplier()) / exchange_rate;
         }
       }
 
-      // UPSERT using ON CONFLICT
       await pool.query(
         `
         INSERT INTO countries (
@@ -144,81 +176,75 @@ app.post('/countries/refresh', async (req, res) => {
       );
     }
 
-    // Generate image
-    await generateSummaryImage(timestamp);
-
+    await generateSummaryImage(now.toISOString());
     return res.json({ message: 'Refresh completed successfully' });
   } catch (err) {
-    console.error('Refresh DB Error:', err);
+    console.error('Refresh failed:', err);
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Generate Summary Image
+// ========================================
+// IMAGE GENERATION
+// ========================================
 async function generateSummaryImage(timestamp) {
-  const totalRes = await pool.query('SELECT COUNT(*) AS total FROM countries');
-  const total = totalRes.rows[0].total;
+  try {
+    const totalRes = await pool.query('SELECT COUNT(*) AS total FROM countries');
+    const total = totalRes.rows[0].total;
 
-  const topRes = await pool.query(`
-    SELECT name, estimated_gdp
-    FROM countries
-    WHERE estimated_gdp IS NOT NULL
-    ORDER BY estimated_gdp DESC
-    LIMIT 5
-  `);
+    const topRes = await pool.query(`
+      SELECT name, estimated_gdp
+      FROM countries
+      WHERE estimated_gdp IS NOT NULL
+      ORDER BY estimated_gdp DESC
+      LIMIT 5
+    `);
 
-  const image = new Jimp(800, 600, 0xffffffff);
-  const fontLarge = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK);
-  const fontMedium = await Jimp.loadFont(Jimp.FONT_SANS_32_BLACK);
-  const fontSmall = await Jimp.loadFont(Jimp.FONT_SANS_16_BLACK);
+    const image = new Jimp(800, 600, 0xffffffff);
+    const fontLarge = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK);
+    const fontMedium = await Jimp.loadFont(Jimp.FONT_SANS_32_BLACK);
+    const fontSmall = await Jimp.loadFont(Jimp.FONT_SANS_16_BLACK);
 
-  let y = 40;
-  image.print(fontLarge, 50, y, 'Country Data Summary');
-  y += 90;
+    let y = 40;
+    image.print(fontLarge, 50, y, 'Country Summary');
+    y += 90;
+    image.print(fontMedium, 50, y, `Total: ${total}`);
+    y += 60;
+    image.print(fontMedium, 50, y, `Refreshed: ${timestamp.split('T')[1].slice(0,8)} UTC`);
+    y += 80;
+    image.print(fontMedium, 50, y, 'Top 5 GDP:');
+    y += 60;
 
-  image.print(fontMedium, 50, y, `Total Countries: ${total}`);
-  y += 60;
+    topRes.rows.forEach((row, i) => {
+      const gdp = row.estimated_gdp ? Number(row.estimated_gdp).toLocaleString('en-US', { maximumFractionDigits: 0 }) : 'N/A';
+      image.print(fontSmall, 70, y, `${i + 1}. ${row.name}: $${gdp}`);
+      y += 40;
+    });
 
-  const formattedTime = `${timestamp.split('T')[0]} ${timestamp.split('T')[1].slice(0,8)} UTC`;
-  image.print(fontMedium, 50, y, `Last Refresh: ${formattedTime}`);
-  y += 80;
-
-  image.print(fontMedium, 50, y, 'Top 5 by Estimated GDP:');
-  y += 60;
-
-  topRes.rows.forEach((row, i) => {
-    const gdp = row.estimated_gdp ? Number(row.estimated_gdp).toLocaleString('en-US', { maximumFractionDigits: 2 }) : 'N/A';
-    image.print(fontSmall, 70, y, `${i + 1}. ${row.name}: $${gdp}`);
-    y += 40;
-  });
-
-  await image.writeAsync(IMAGE_PATH);
+    await image.writeAsync(IMAGE_PATH);
+    console.log('Summary image generated:', IMAGE_PATH);
+  } catch (err) {
+    console.error('Image generation failed:', err);
+  }
 }
 
+// ========================================
 // GET /countries
+// ========================================
 app.get('/countries', async (req, res) => {
   const { region, currency, sort } = req.query;
-
   let query = 'SELECT * FROM countries';
   const where = [];
   const params = [];
-  let paramIndex = 1;
+  let idx = 1;
 
-  if (region) {
-    where.push(`region = $${paramIndex++}`);
-    params.push(region);
-  }
-  if (currency) {
-    where.push(`currency_code = $${paramIndex++}`);
-    params.push(currency);
-  }
+  if (region) { where.push(`region = $${idx++}`); params.push(region); }
+  if (currency) { where.push(`currency_code = $${idx++}`); params.push(currency); }
   if (where.length) query += ' WHERE ' + where.join(' AND ');
 
-  if (sort === 'gdp_desc') {
-    query += ' ORDER BY estimated_gdp DESC NULLS LAST';
-  } else {
-    query += ' ORDER BY name ASC';
-  }
+  query += sort === 'gdp_desc'
+    ? ' ORDER BY estimated_gdp DESC NULLS LAST'
+    : ' ORDER BY name ASC';
 
   try {
     const result = await pool.query(query, params);
@@ -229,46 +255,64 @@ app.get('/countries', async (req, res) => {
   }
 });
 
+// ========================================
 // GET /countries/:name
+// ========================================
 app.get('/countries/:name', async (req, res) => {
-  const result = await pool.query(
-    'SELECT * FROM countries WHERE name_lower = LOWER($1)',
-    [req.params.name]
-  );
-  if (result.rows.length === 0) {
-    return res.status(404).json({ error: 'Country not found' });
+  try {
+    const result = await pool.query(
+      'SELECT * FROM countries WHERE name_lower = LOWER($1)',
+      [req.params.name]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Country not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
   }
-  res.json(result.rows[0]);
 });
 
+// ========================================
 // DELETE /countries/:name
+// ========================================
 app.delete('/countries/:name', async (req, res) => {
-  const result = await pool.query(
-    'DELETE FROM countries WHERE name_lower = LOWER($1)',
-    [req.params.name]
-  );
-  if (result.rowCount === 0) {
-    return res.status(404).json({ error: 'Country not found' });
+  try {
+    const result = await pool.query(
+      'DELETE FROM countries WHERE name_lower = LOWER($1)',
+      [req.params.name]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Country not found' });
+    }
+    res.json({ message: 'Country deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
   }
-  res.json({ message: 'Country deleted successfully' });
 });
 
+// ========================================
 // GET /status
+// ========================================
 app.get('/status', async (req, res) => {
-  const totalRes = await pool.query('SELECT COUNT(*) AS total FROM countries');
-  const timeRes = await pool.query('SELECT MAX(last_refreshed_at) AS last_refreshed_at FROM countries');
+  try {
+    const totalRes = await pool.query('SELECT COUNT(*) AS total FROM countries');
+    const timeRes = await pool.query('SELECT MAX(last_refreshed_at) AS last_refreshed_at FROM countries');
 
-  const last = timeRes.rows[0].last_refreshed_at
-    ? new Date(timeRes.rows[0].last_refreshed_at).toISOString()
-    : null;
-
-  res.json({
-    total_countries: parseInt(totalRes.rows[0].total),
-    last_refreshed_at: last
-  });
+    res.json({
+      total_countries: parseInt(totalRes.rows[0].total),
+      last_refreshed_at: timeRes.rows[0].last_refreshed_at
+        ? new Date(timeRes.rows[0].last_refreshed_at).toISOString()
+        : null
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
+// ========================================
 // GET /countries/image
+// ========================================
 app.get('/countries/image', async (req, res) => {
   try {
     await fs.access(IMAGE_PATH);
@@ -278,18 +322,35 @@ app.get('/countries/image', async (req, res) => {
   }
 });
 
-// Global Error Handler
+// ========================================
+// HEALTH CHECK
+// ========================================
+app.get('/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ status: 'healthy', db: 'connected' });
+  } catch {
+    res.status(500).json({ status: 'unhealthy', db: 'disconnected' });
+  }
+});
+
+// ========================================
+// ERROR HANDLING
+// ========================================
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error('Unhandled error:', err);
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// 404 Handler
 app.use('*', (req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
 
+// ========================================
+// START SERVER
+// ========================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`API running on http://localhost:${PORT}`);
+  console.log(`Health: http://localhost:${PORT}/health`);
 });
