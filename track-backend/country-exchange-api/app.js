@@ -13,32 +13,31 @@ const app = express();
 app.use(express.json());
 
 // ========================================
-// DATABASE CONNECTION (Railway-Ready)
+// DATABASE CONNECTION
 // ========================================
 let pool;
 
 try {
   if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL is not set. Add it in Railway variables as ${{Postgres.DATABASE_URL}}');
+    throw new Error('DATABASE_URL is not set. Set it to the external connection string from Railway.');
   }
 
   pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: {
-      rejectUnauthorized: false // Required for Railway
+      rejectUnauthorized: false
     },
     connectionTimeoutMillis: 5000,
-    max: 10,
-    idleTimeoutMillis: 30000
+    max: 10
   });
 
-  console.log('PostgreSQL pool created successfully');
+  console.log('PostgreSQL pool created');
 } catch (err) {
-  console.error('Failed to create DB pool:', err.message);
+  console.error('DB Pool Error:', err.message);
   process.exit(1);
 }
 
-// Test connection on startup
+// Test connection
 (async () => {
   try {
     const client = await pool.connect();
@@ -53,7 +52,7 @@ try {
 // DATABASE INITIALIZATION
 // ========================================
 async function initDB() {
-  const createTableSQL = `
+  const sql = `
     CREATE TABLE IF NOT EXISTS countries (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
@@ -75,8 +74,8 @@ async function initDB() {
   `;
 
   try {
-    await pool.query(createTableSQL);
-    console.log('Table "countries" and indexes ready');
+    await pool.query(sql);
+    console.log('Table and indexes ready');
   } catch (err) {
     console.error('DB Init Error:', err.message);
   }
@@ -85,7 +84,7 @@ async function initDB() {
 initDB();
 
 // ========================================
-// CACHE & IMAGE SETUP
+// CACHE SETUP
 // ========================================
 const CACHE_DIR = path.join(__dirname, 'cache');
 const IMAGE_PATH = path.join(CACHE_DIR, 'summary.png');
@@ -93,13 +92,15 @@ const IMAGE_PATH = path.join(CACHE_DIR, 'summary.png');
 (async () => {
   try {
     await fs.mkdir(CACHE_DIR, { recursive: true });
-    console.log('Cache directory ready');
+    console.log('Cache directory ensured:', CACHE_DIR);
   } catch (err) {
-    console.error('Failed to create cache dir:', err);
+    console.error('Cache dir error:', err);
   }
 })();
 
-// Helper: Random multiplier 1000–2000
+// ========================================
+// HELPERS
+// ========================================
 const getRandomMultiplier = () => Math.random() * 1000 + 1000;
 
 // ========================================
@@ -108,7 +109,6 @@ const getRandomMultiplier = () => Math.random() * 1000 + 1000;
 app.post('/countries/refresh', async (req, res) => {
   let countriesData, ratesData;
 
-  // 1. Fetch countries
   try {
     const resp = await axios.get(
       'https://restcountries.com/v2/all?fields=name,capital,region,population,flag,currencies',
@@ -122,7 +122,6 @@ app.post('/countries/refresh', async (req, res) => {
     });
   }
 
-  // 2. Fetch exchange rates
   try {
     const resp = await axios.get('https://open.er-api.com/v6/latest/USD', { timeout: 10000 });
     if (!resp.data.rates) throw new Error('Invalid rates');
@@ -143,7 +142,7 @@ app.post('/countries/refresh', async (req, res) => {
 
       let currency_code = null;
       let exchange_rate = null;
-      let estimated_gdp = 0;
+      let estimated_gdp = null;
 
       if (currencies && Array.isArray(currencies) && currencies.length > 0) {
         currency_code = currencies[0].code || null;
@@ -151,6 +150,8 @@ app.post('/countries/refresh', async (req, res) => {
           exchange_rate = parseFloat(ratesData[currency_code]);
           estimated_gdp = (population * getRandomMultiplier()) / exchange_rate;
         }
+      } else {
+        estimated_gdp = 0;
       }
 
       await pool.query(
@@ -170,8 +171,8 @@ app.post('/countries/refresh', async (req, res) => {
           last_refreshed_at = EXCLUDED.last_refreshed_at
         `,
         [
-          name, capital || null, region || null, population, currency_code,
-          exchange_rate, estimated_gdp, flag || null, now
+          name, capital || null, region || null, population,
+          currency_code, exchange_rate, estimated_gdp, flag || null, now
         ]
       );
     }
@@ -185,7 +186,7 @@ app.post('/countries/refresh', async (req, res) => {
 });
 
 // ========================================
-// IMAGE GENERATION
+// IMAGE GENERATION (FIXED)
 // ========================================
 async function generateSummaryImage(timestamp) {
   try {
@@ -196,7 +197,7 @@ async function generateSummaryImage(timestamp) {
       SELECT name, estimated_gdp
       FROM countries
       WHERE estimated_gdp IS NOT NULL
-      ORDER BY estimated_gdp DESC
+      ORDER BY estimated_gdp::NUMERIC DESC
       LIMIT 5
     `);
 
@@ -210,21 +211,24 @@ async function generateSummaryImage(timestamp) {
     y += 90;
     image.print(fontMedium, 50, y, `Total: ${total}`);
     y += 60;
-    image.print(fontMedium, 50, y, `Refreshed: ${timestamp.split('T')[1].slice(0,8)} UTC`);
+    image.print(fontMedium, 50, y, `Refreshed: ${new Date(timestamp).toUTCString()}`);
     y += 80;
-    image.print(fontMedium, 50, y, 'Top 5 GDP:');
+    image.print(fontMedium, 50, y, 'Top 5 by Est. GDP:');
     y += 60;
 
     topRes.rows.forEach((row, i) => {
-      const gdp = row.estimated_gdp ? Number(row.estimated_gdp).toLocaleString('en-US', { maximumFractionDigits: 0 }) : 'N/A';
+      const gdp = row.estimated_gdp != null
+        ? Number(row.estimated_gdp).toLocaleString('en-US', { maximumFractionDigits: 0 })
+        : 'N/A';
       image.print(fontSmall, 70, y, `${i + 1}. ${row.name}: $${gdp}`);
       y += 40;
     });
 
+    await fs.mkdir(CACHE_DIR, { recursive: true });
     await image.writeAsync(IMAGE_PATH);
-    console.log('Summary image generated:', IMAGE_PATH);
+    console.log('Summary image saved:', IMAGE_PATH);
   } catch (err) {
-    console.error('Image generation failed:', err);
+    console.error('Image generation failed:', err.message);
   }
 }
 
@@ -242,15 +246,17 @@ app.get('/countries', async (req, res) => {
   if (currency) { where.push(`currency_code = $${idx++}`); params.push(currency); }
   if (where.length) query += ' WHERE ' + where.join(' AND ');
 
-  query += sort === 'gdp_desc'
-    ? ' ORDER BY estimated_gdp DESC NULLS LAST'
-    : ' ORDER BY name ASC';
+  if (sort === 'gdp_desc') {
+    query += ' ORDER BY estimated_gdp::NUMERIC DESC NULLS LAST';
+  } else {
+    query += ' ORDER BY name ASC';
+  }
 
   try {
     const result = await pool.query(query, params);
     res.json(result.rows);
   } catch (err) {
-    console.error(err);
+    console.error('GET /countries error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -266,6 +272,7 @@ app.get('/countries/:name', async (req, res) => {
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Country not found' });
+hi });
     }
     res.json(result.rows[0]);
   } catch (err) {
@@ -352,5 +359,4 @@ app.use('*', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`API running on http://localhost:${PORT}`);
-  console.log(`Health: http://localhost:${PORT}/health`);
 });
