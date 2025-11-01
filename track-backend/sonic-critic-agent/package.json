@@ -1,0 +1,29 @@
+{
+  "name": "sonic-critic-agent",
+  "version": "1.0.0",
+  "description": "An AI agent for Telex.im that synthesizes the top 5 album reviews using RAG and web scraping.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "keywords": [
+    "ai-agent",
+    "a2a",
+    "gemini",
+    "rag",
+    "node",
+    "express"
+  ],
+  "license": "ISC",
+  "dependencies": {
+    "@google/genai": "^0.1.0",
+    "axios": "^1.6.8",
+    "cheerio": "^1.0.0-rc.12",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
