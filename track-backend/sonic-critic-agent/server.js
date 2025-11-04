@@ -1,25 +1,27 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const { GoogleGenAI } = require('@google/genai');
-const axios = require('axios');
-const cheerio = require('cheerio');
-require('dotenv').config(); // Load environment variables from .env
+
+
+
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+// Ensure PORT is set by the environment (Railway)
+const PORT = process.env.PORT || 3000; 
 
 // Initialize Google Gemini
 const ai = new GoogleGenAI(process.env.GEMINI_API_KEY);
 const MODEL_NAME = 'gemini-2.5-flash';
 
-// Middleware
-app.use(bodyParser.json());
+// --- MIDDLEWARE ---
+app.use(bodyParser.json()); 
+
 
 // --- 1. A2A DISCOVERY: /.well-known/agent.json (GET) ---
 const agentJson = {
     "name": "SonicCritic Agent",
     "description": "Synthesizes top 5 album reviews into critical consensus using Google Gemini.",
-    "url": process.env.AGENT_BASE_URL + "/a2a/agent", // Ensure AGENT_BASE_URL is set in .env
+    "url": process.env.AGENT_BASE_URL + "/a2a/agent", 
     "skills": [
         {
             "id": "album_review_synthesizer",
@@ -30,27 +32,19 @@ const agentJson = {
 };
 
 app.get('/.well-known/agent.json', (req, res) => {
-    // Note: Always use the correct MIME type for JSON files
     res.setHeader('Content-Type', 'application/json');
     res.json(agentJson);
 });
 
 
 // --- 2. RELIABILITY: /healthz (GET) ---
-// Simple endpoint to confirm the server is running.
 app.get('/healthz', (req, res) => {
     res.status(200).send('OK');
 });
 
 
 // --- 3. CORE LOGIC FUNCTION ---
-/**
- * Main function to run the SonicCritic workflow (Scrape -> Gemini -> Synthesize).
- * @param {string} messageText - The raw user message (e.g., "Review OK Computer by Radiohead").
- * @returns {Promise<string>} - The final, formatted Markdown review.
- */
 async function runSonicCritic(messageText) {
-    // --- 3.1. Parsing (Extract Album and Artist) ---
     const match = messageText.match(/review\s+(.*?)\s+by\s+(.*)/i);
     if (!match) {
         return "⚠️ Error: Could not parse album and artist. Please use the format: `Review [Album] by [Artist]`";
@@ -58,42 +52,43 @@ async function runSonicCritic(messageText) {
     const album = match[1].trim();
     const artist = match[2].trim();
     
-    // --- 3.2. Data Acquisition (Placeholder for Scraping) ---
-    // NOTE: In a real deployment, you would replace this with live scraping and search.
-    const mockReviews = [
-        { url: "https://pitchfork.com/mock-review-1", text: `Review text for ${album} by ${artist} is great, score 9.0/10...` },
-        { url: "https://rollingstone.com/mock-review-2", text: `Review text for ${album} by ${artist} is amazing, score 4.5/5...` },
-    ];
+   
+    const mockReviewText = `
+        Source 1 says: The album ${album} by ${artist} is a masterpiece, score 9.5/10.
+        Source 2 says: It's a challenging but rewarding listen, score 8.0/10.
+        Source 3 says: Critics are calling it genre-defining, score 9/10.
+    `;
+
+    const systemPrompt = "You are SonicCritic, an expert music journalist. Your task is to synthesize the provided review text into a final, coherent critical summary in clean Markdown format.";
     
-    // --- 3.3. LLM Synthesis (Placeholder) ---
-    const summaries = await Promise.all(mockReviews.map(async (review) => {
-        // --- This is where the actual Gemini call goes ---
-        // For simplicity, we return a mock summary here:
-        return `
-**Review Source:** ${review.url}
-- **Core Argument:** A bold, emotional, and highly dynamic work that redefines the genre.
-- **Score:** 8.8/10
-`;
-    }));
+    const userPrompt = `
+        ${systemPrompt}
+        
+        Synthesize the critical consensus for the album: **${album}** by **${artist}**.
+        
+        Analyze the following texts and generate a final verdict summarizing the overall sentiment and average score:
+        
+        --- REVIEW TEXTS ---
+        ${mockReviewText}
+        --- END ---
+    `;
+    
+    try {
+        const response = await ai.models.generateContent({
+            model: MODEL_NAME,
+            contents: userPrompt, 
+        });
+        
+        return response.text; 
 
-    // --- 3.4. Final Compilation ---
-    const finalSynthesis = summaries.join('\n---\n');
-    return `
-**🎵 SonicCritic Consensus for "${album}" by ${artist} 🎵**
-
-Found 2 review sources. Starting synthesis...
-
-${finalSynthesis}
-
----
-**Final Summary**
-Consensus: **Highly Acclaimed** (Avg ~8.8/10) — This album is a creative masterpiece that will endure for decades.
-`;
+    } catch (error) {
+        console.error("Gemini API Error:", error);
+        return `❌ **Synthesis Error:** I failed to contact the Gemini API to process the reviews. (Details: ${error.message})`;
+    }
 }
 
 
 // --- 4. A2A MESSAGING: /a2a/agent (POST) ---
-// THIS FIXES THE "CANNOT GET" ERROR. A2A uses POST, not GET.
 app.post('/a2a/agent', async (req, res) => {
     const payload = req.body;
     
@@ -114,19 +109,23 @@ app.post('/a2a/agent', async (req, res) => {
         
         // Ensure it's the right skill being called
         if (payload.method !== 'album_review_synthesizer') {
-            throw new Error(`Unknown method: ${payload.method}`);
+             return res.status(400).json({
+                jsonrpc: '2.0',
+                id: payload.id,
+                error: { code: -32601, message: `Method not found: ${payload.method}` }
+            });
         }
         
-    
+        // 4.2. Run the Core Logic
         const finalResponseMarkdown = await runSonicCritic(userMessage);
 
-        
+        // 4.3. Send A2A Compliant Success Response
         return res.json({
             jsonrpc: '2.0',
             id: payload.id, 
             result: {
                 output_mode: 'text',
-                text: finalResponseMarkdown 
+                text: finalResponseMarkdown
             }
         });
 
@@ -138,18 +137,15 @@ app.post('/a2a/agent', async (req, res) => {
             jsonrpc: '2.0',
             id: payload.id,
             error: {
-                code: -32603, // Internal Error Code
-                message: `SonicCritic failed: ${error.message || 'An unknown processing error occurred.'}`
+                code: -32603,
+                message: `SonicCritic failed due to an unhandled exception: ${error.message}`
             }
         });
     }
 });
 
 
-// Start Server
+// --- START SERVER ---
 app.listen(PORT, () => {
     console.log(`SonicCritic agent is listening on port ${PORT}`);
-    console.log(`Discovery: http://localhost:${PORT}/.well-known/agent.json`);
-    console.log(`Health: http://localhost:${PORT}/healthz`);
-    console.log(`Messaging: http://localhost:${PORT}/a2a/agent (POST)`);
 });
