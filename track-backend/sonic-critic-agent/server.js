@@ -6,14 +6,15 @@ import * as dotenv from 'dotenv';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { GoogleGenAI } from '@google/genai';
-import rateLimit from 'express-rate-limit';
+// import rateLimit from 'express-rate-limit'; // FIX 2: Removed/commented out rateLimit
+import { GoogleSearch } from 'google-search-results-nodejs';
 
 dotenv.config();
 
 // === CONFIG ===
 const app = express();
 const PORT = process.env.PORT || 3000;
-const AGENT_BASE_URL = process.env.AGENT_BASE_URL || 'https://hng13-internship-production.up.railway.app';
+const AGENT_BASE_URL = process.env.AGENT_BASE_URL || `http://localhost:${PORT}`;
 
 // Gemini Init
 let ai;
@@ -26,11 +27,14 @@ try {
     geminiClientError = e.message;
     console.error("[INIT FATAL]", e.message);
 }
-const model = 'gemini-1.5-flash';
+const model = 'gemini-1.5-flash'; // Recommended fast model
+
+// SerpAPI (optional)
+const serp = process.env.SERPAPI_KEY ? new GoogleSearch(process.env.SERPAPI_KEY) : null;
 
 // Middleware
 app.use(bodyParser.json({ limit: '10mb' }));
-app.use('/a2a/agent', rateLimit({ windowMs: 60_000, max: 15 }));
+// FIX 2: Removed/commented out: app.use('/a2a/agent', rateLimit({ windowMs: 60_000, max: 15 }));
 
 // === AGENT CARD ===
 const agentJson = {
@@ -44,132 +48,162 @@ const agentJson = {
     }]
 };
 
-// === SCRAPING ===
+// === SCRAPING (SerpAPI + Google Fallback) ===
 async function scrapeReviews(album, artist) {
     console.log(`[SCRAPER] Searching: "${album}" by "${artist}"`);
     const query = `${album} ${artist} album review`;
-    const url = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
 
+    // Try SerpAPI (if configured)
+    if (serp) {
+        try {
+            const result = await new Promise((res, rej) => {
+                serp.json({ q: query, num: 6 }, (r) => r.error ? rej(r.error) : res(r));
+            });
+            const snippets = result.organic_results
+                ?.filter(r => r.snippet?.length > 60)
+                ?.slice(0, 5)
+                ?.map(r => `Source: ${r.title}\nSnippet: ${r.snippet}`);
+            if (snippets?.length >= 2) {
+                console.log(`[SCRAPER] Found ${snippets.length} snippets via SerpAPI.`);
+                return snippets;
+            }
+        } catch (e) { console.warn("[SCRAPER] SerpAPI failed, falling back:", e.message); }
+    }
+
+    // Fallback: Google HTML
+    const url = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000); // ← INCREASED TO 15s
+    
+    // FIX 1: Drastically reduced scraping timeout for speed
+    const timeout = setTimeout(() => controller.abort(), 5000); 
 
     try {
+        console.log(`[SCRAPER] Attempting Google HTML fallback with 5s timeout.`);
         const { data } = await axios.get(url, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+            headers: { 'User-Agent': 'Mozilla/5.0' },
             signal: controller.signal
         });
         clearTimeout(timeout);
 
         const $ = cheerio.load(data);
         const texts = [];
-        $('div.g').slice(0, 6).each((i, el) => {
-            const snippet = $(el).find('.VwiC3b, .st').first().text().trim();
-            const title = $(el).find('h3').text() || 'Review';
-            if (snippet.length > 60) {
-                texts.push(`Source: ${title}\nSnippet: ${snippet}`);
+        $('div.g:lt(5) .VwiC3b, div.g:lt(5) .st').each((i, el) => {
+            const txt = $(el).text().trim();
+            if (txt.length > 60) {
+                const title = $(el).closest('.g').find('h3').text() || 'Unknown';
+                texts.push(`Source: ${title}\nSnippet: ${txt}`);
             }
         });
-
-        if (texts.length === 0) throw new Error("No review snippets found");
+        if (texts.length === 0) throw new Error("No snippets found");
+        console.log(`[SCRAPER] Found ${texts.length} snippets via HTML fallback.`);
         return texts;
     } catch (e) {
+        if (e.code === 'ERR_CANCELED') throw new Error("Scraping timeout exceeded 5 seconds.");
+        throw new Error(`Scraping failed: ${e.message}`);
+    } finally {
         clearTimeout(timeout);
-        throw new Error("Scraping failed or timed out");
     }
 }
 
-// === AI SYNTHESIS (UPDATED PROMPT) ===
+// === AI SYNTHESIS ===
 async function synthesizeConsensus(album, artist, reviews) {
-    const block = reviews.map(r => r.replace(/`/g, '\\`')).join('\n\n---\n\n');
-
+    console.log(`[SYNTHESIS] Starting Gemini consensus.`);
+    // Using map/join for better prompt security
+    const block = reviews.map(r => r.replace(/`/g, '\\`')).join('\n\n---\n\n'); 
+    
     const prompt = `
 You are SonicCritic. Synthesize reviews for "${album}" by "${artist}" into a **Critical Consensus** in Markdown.
 - Keep the total output to a maximum of 300 words.
 - Structure: Short Rating (e.g., 8.5/10), Main Praises, Main Criticisms, Summary Verdict.
-- Do NOT include any source texts in the final output.
+- No source mentions, no reference to the raw snippets.
 
+Raw Snippets:
 ${block}
 `;
 
     const res = await ai.models.generateContent({
-        model,
-        contents: [{ role: "user", parts: [{ text: prompt }] }]
+        model, 
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        // Set a low generation timeout if possible, though LLM is typically faster than scraping
     });
-    return res.text?.trim() || "No consensus generated.";
+    console.log(`[SYNTHESIS] Generation complete.`);
+    return res.text || "No output generated by AI.";
 }
 
 // === DEBUG ENDPOINTS ===
 app.get('/debug', (req, res) => res.json({
     status: "OK",
     gemini: { ready: !geminiClientError, error: geminiClientError },
-    env: { AGENT_BASE_URL, hasGeminiKey: !!process.env.GEMINI_API_KEY },
-    timestamp: new Date().toISOString()
+    env: { hasGeminiKey: !!process.env.GEMINI_API_KEY, hasSerpKey: !!process.env.SERPAPI_KEY },
+    url: AGENT_BASE_URL
 }));
 
-app.get('/ping', (req, res) => res.send('pong'));
-app.get('/healthz', (req, res) => res.send('OK'));
-
-// === AGENT DISCOVERY (ANY SUB-PATH) ===
-app.get(/\.well-known\/agent\.json$/, (req, res) => {
-    console.log("[DISCOVERY] Served from:", req.originalUrl);
-    res.json(agentJson);
+app.get('/test-timeout', async (req, res) => {
+    await new Promise(r => setTimeout(r, 20000));
+    res.send('OK');
 });
 
-// === A2A ENDPOINT ===
+// === A2A ENDPOINTS ===
+app.get('/.well-known/agent.json', (req, res) => res.json(agentJson));
+app.get('/healthz', (req, res) => res.send('OK'));
+
 app.post('/a2a/agent', async (req, res) => {
-    const { jsonrpc = "2.0", id, method, params } = req.body;
+    const { jsonrpc, id, method, params } = req.body;
 
     if (geminiClientError) {
-        return res.json({ jsonrpc, id, error: { code: -32603, message: geminiClientError } });
+        return res.json({ jsonrpc: "2.0", id, error: { code: -32603, message: geminiClientError } });
     }
 
-    if (method !== 'album_review_synthesizer' || !params?.text) {
-        return res.json({ jsonrpc, id, error: { code: -32601, message: "Invalid method or missing text" } });
+    if (jsonrpc !== '2.0' || !method || !id || !params?.text) {
+        return res.json({ jsonrpc: "2.0", id, error: { code: -32600, message: "Invalid request" } });
+    }
+
+    if (method !== 'album_review_synthesizer') {
+        return res.json({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } });
     }
 
     try {
-        const result = await Promise.race([
-            (async () => {
-                const input = params.text.trim();
+        const input = params.text.trim();
 
-                // Flexible parsing
-                const match = input.match(/(?:review|reviews?|consensus)[\s#0-9B]*\s*(.+?)(?:\s+(?:by|of|from)\s+(.+))?$/i);
-                if (!match) throw new Error("Use: 'Review [Album] by [Artist]'");
+        // FLEXIBLE REGEX
+        const match = input.match(/(?:review|reviews|consensus|analyze)[\s#0-9B]*\s*(.+?)(?:\s+(?:by|from|of)\s+(.+))?$/i);
+        if (!match) throw new Error("Use: 'Review [Album] by [Artist]'");
 
-                let album = match[1].trim();
-                let artist = (match[2] || '').trim();
+        let album = match[1].trim();
+        let artist = (match[2] || '').trim();
 
-                if (!artist && album) {
-                    const parts = album.split(/\s+/);
-                    if (parts.length > 1) {
-                        artist = parts.pop();
-                        album = parts.join(' ');
-                    }
-                }
+        if (!artist && album) {
+            const parts = album.split(/\s+/);
+            artist = parts.pop();
+            album = parts.join(' ');
+        }
+        
+        console.log(`\n--- REQUEST START: ${album} by ${artist} ---`);
 
-                if (!album || !artist) throw new Error("Could not extract album/artist");
+        const reviews = await scrapeReviews(album, artist);
+        const result = await synthesizeConsensus(album, artist, reviews);
 
-                console.log(`[PARSE] Album: "${album}" | Artist: "${artist}"`);
+        console.log("--- REQUEST END (Success) ---");
+        return res.json({ jsonrpc: "2.0", id, result });
 
-                const reviews = await scrapeReviews(album, artist);
-                const consensus = await synthesizeConsensus(album, artist, reviews);
-                return consensus;
-            })(),
-
-            new Promise((_, rej) => setTimeout(() => rej(new Error("Request timed out")), 25000))
-        ]);
-
-        res.json({ jsonrpc, id, result });
-    } catch (e) {
-        console.error("[A2A ERROR]", e.message);
-        res.json({ jsonrpc, id, error: { code: -32000, message: e.message } });
+    } catch (error) {
+        // FIX 3: Enhanced error logging with timestamp
+        console.error(`[A2A FAIL @ ${new Date().toISOString()}] Agent Execution Failed:`, error.message); 
+        
+        // Return a JSON-RPC error response
+        return res.json({
+            jsonrpc: "2.0",
+            id: id,
+            error: {
+                code: -32603,
+                message: `Internal server error during skill execution. Reason: ${error.message}`
+            }
+        });
     }
 });
 
-// === START ===
+// === START SERVER ===
 app.listen(PORT, () => {
-    console.log(`\nSonicCritic Agent LIVE`);
-    console.log(`URL: ${AGENT_BASE_URL}/a2a/agent`);
-    console.log(`Discovery: ${AGENT_BASE_URL}/[any-path]/.well-known/agent.json`);
-    console.log(`telex.im: https://telex.im/ai-coworkers/soniccritic-0bc5e3dfc0e9\n`);
+    console.log(`SonicCritic Agent listening on port ${PORT}`);
+    console.log(`Base URL is: ${AGENT_BASE_URL}`);
 });
