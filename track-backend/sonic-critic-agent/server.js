@@ -1,4 +1,3 @@
-
 // server.js
 
 // 1. Setup Dependencies and Imports
@@ -16,9 +15,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const AGENT_BASE_URL = process.env.AGENT_BASE_URL;
 
-// Initialize Google Gemini Client
+// Initialize Google Gemini Client (will crash if GEMINI_API_KEY is missing)
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const model = 'gemini-2.5-flash'; // Good balance of speed and quality
+const model = 'gemini-2.5-flash'; 
 
 // Middleware
 app.use(bodyParser.json());
@@ -39,38 +38,38 @@ const agentJson = {
 
 /**
  * Searches Google for the top 4 album reviews and scrapes content snippets.
- * @param {string} album 
- * @param {string} artist 
- * @returns {Promise<Array<string>>} An array of scraped review texts.
  */
 async function scrapeReviews(album, artist) {
-   
-    const searchQuery = `${album} ${artist} album review`;
+    console.log(`[SCRAPER DEBUG] Starting scraping for: ${album} by ${artist}`); 
 
-    
+    const searchQuery = `${album} ${artist} album review`;
     const url = `https://www.google.com/search?q=${encodeURIComponent(searchQuery)}`;
     
     try {
+        console.log(`[SCRAPER DEBUG] Attempting to fetch URL: ${url}`); 
+
         const response = await axios.get(url, {
-            // A realistic User-Agent is crucial to avoid being blocked
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             },
-            timeout: 10000 // Set a 10 second timeout for fetching the search page
+            timeout: 10000 // 10 second timeout
         });
+
+        console.log(`[SCRAPER DEBUG] Successfully fetched response. Status: ${response.status}`); 
 
         const $ = cheerio.load(response.data);
         const scrapedTexts = [];
 
-        
+        // Selectors targeting organic search result snippets 
         $('div.g:lt(4) .VwiC3b, div.g:lt(4) .st, div.g:lt(4) .Uroaid').each((i, element) => {
             const snippet = $(element).text();
             if (snippet && snippet.length > 50) {
-                
                 const title = $(element).closest('.g').find('h3').text();
                 scrapedTexts.push(`Source Title: ${title || 'Unknown'}\nSnippet: ${snippet}`);
             }
         });
+
+        console.log(`[SCRAPER DEBUG] Found ${scrapedTexts.length} snippets.`); 
 
         if (scrapedTexts.length === 0) {
             throw new Error("Could not find enough substantial review snippets to synthesize.");
@@ -79,28 +78,25 @@ async function scrapeReviews(album, artist) {
         return scrapedTexts;
 
     } catch (error) {
-        console.error("Scraping error:", error.message);
-        throw new Error(`Web scraping failed: ${error.message}`);
+        const errorMessage = error.code ? `${error.code}: ${error.message}` : error.message;
+        console.error(`[SCRAPER ERROR] Web scraping failed: ${errorMessage}`);
+        throw new Error(`Web scraping failed (Network/Scrape Error): ${errorMessage}`);
     }
 }
 
 
 /**
  * Uses Google Gemini to synthesize the scraped review texts into a consensus.
- * @param {string} album 
- * @param {string} artist 
- * @param {Array<string>} reviews 
- * @returns {Promise<string>} The synthesized critical consensus.
  */
 async function synthesizeConsensus(album, artist, reviews) {
+    console.log(`[GEMINI DEBUG] Starting synthesis.`); 
+
     const reviewBlock = reviews.join('\n\n====================\n\n');
     
     const prompt = `
         You are SonicCritic, an expert music journalist. Your task is to receive multiple raw, scraped text inputs from different Google search result snippets for the album "${album}" by "${artist}".
 
-        Analyze all provided texts. For each snippet (separated by "====================="), summarize the core sentiment and rating (if available).
-
-        Finally, write a cohesive, overall **Critical Consensus** in rich Markdown.
+        Analyze all provided texts. Write a cohesive, overall **Critical Consensus** in rich Markdown.
 
         **OUTPUT FORMAT MUST BE:**
         
@@ -108,7 +104,7 @@ async function synthesizeConsensus(album, artist, reviews) {
         
         ### Individual Review Summary
         
-        * **Source 1:** [Core sentiment and/or argument]. **Score:** [Rating/General Sentiment]
+        * [Summary of Source 1's sentiment and/or argument].
         * ... (List all 3-4 sources found)
         
         ---
@@ -119,39 +115,44 @@ async function synthesizeConsensus(album, artist, reviews) {
         
         ---
         
-        **Raw Snippet Texts to Analyze:**
+        **Raw Snippet Texts to Analyze:** (Do NOT include this block in the final output, it is for reference only)
         
         ${reviewBlock}
     `;
 
-    const response = await ai.models.generateContent({
-        model: model,
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-    });
-
-    return response.text;
+    try {
+        const response = await ai.models.generateContent({
+            model: model,
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+        });
+        
+        console.log(`[GEMINI DEBUG] Synthesis complete.`); 
+        return response.text;
+    } catch (error) {
+        console.error(`[GEMINI ERROR] Synthesis failed: ${error.message}`);
+        throw new Error(`AI Synthesis failed (Gemini Error): ${error.message}`);
+    }
 }
 
 
+// 4. A2A Required Endpoints (and Protocol Handler)
 
+// 4.1. Agent Discovery Endpoint (/.well-known/agent.json)
 app.get('/.well-known/agent.json', (req, res) => {
     res.json(agentJson);
 });
 
-
+// 4.2. Health Check Endpoint (/healthz)
 app.get('/healthz', (req, res) => {
     res.status(200).send('OK');
 });
 
-
+// 4.3. Main A2A Communication Endpoint (/a2a/agent)
 app.post('/a2a/agent', async (req, res) => {
     const { jsonrpc, id, method, params } = req.body;
 
     // --- A2A Protocol Validation ---
-    
-    // Check 1: Basic JSON-RPC structure check
     if (jsonrpc !== '2.0' || !method || !id || !params) {
-        // HNG Fix: Use HTTP 200 with JSON-RPC error code -32600
         return res.status(200).json({ 
             jsonrpc: "2.0",
             id: id || null,
@@ -159,10 +160,8 @@ app.post('/a2a/agent', async (req, res) => {
         });
     }
 
-    // Check 2: Method (Skill) existence check
     const supportedSkill = agentJson.skills.find(skill => skill.id === method);
     if (!supportedSkill) {
-        // HNG Fix: Use HTTP 200 with JSON-RPC error code -32601
         return res.status(200).json({
             jsonrpc: "2.0",
             id: id,
@@ -175,12 +174,9 @@ app.post('/a2a/agent', async (req, res) => {
     if (method === 'album_review_synthesizer') {
         try {
             const input = params.text;
-            
-            // Regex to extract Album and Artist
             const match = input.match(/review\s+(.*?)\s+by\s+(.*)/i);
             
             if (!match) {
-                // HNG Fix: Use HTTP 200 with Application Error (-32000)
                 return res.status(200).json({
                     jsonrpc: "2.0",
                     id: id,
@@ -194,26 +190,25 @@ app.post('/a2a/agent', async (req, res) => {
             const album = match[1].trim();
             const artist = match[2].trim();
 
-            console.log(`Starting process for Album: ${album}, Artist: ${artist}`);
+            console.log(`\n--- New Request: ${album} by ${artist} ---`);
             
             // STEP 1: Scrape Reviews
             const reviews = await scrapeReviews(album, artist);
-            console.log(`Successfully scraped ${reviews.length} review snippet(s).`);
-
+            
             // STEP 2: Synthesize Consensus using Gemini
             const consensus = await synthesizeConsensus(album, artist, reviews);
 
             // Return the successful JSON-RPC response
+            console.log("--- Request Complete (Success) ---\n");
             return res.status(200).json({
                 jsonrpc: "2.0",
                 id: id,
-                result: consensus // The Markdown string generated by Gemini
+                result: consensus
             });
 
         } catch (error) {
-            console.error("Agent Execution Error:", error.message);
+            console.error("Agent Execution Failed:", error.message);
             
-            // HNG Fix: Use HTTP 200 with Internal Server Error (-32603)
             return res.status(200).json({
                 jsonrpc: "2.0",
                 id: id,
