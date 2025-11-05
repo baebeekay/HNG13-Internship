@@ -48,12 +48,11 @@ const agentJson = {
     }]
 };
 
-// === SCRAPING (SerpAPI + Google Fallback) ===
+// === SCRAPING ===
 async function scrapeReviews(album, artist) {
     console.log(`[SCRAPER] Searching: "${album}" by "${artist}"`);
     const query = `${album} ${artist} album review`;
 
-    // Try SerpAPI
     if (serp) {
         try {
             const result = await new Promise((res, rej) => {
@@ -67,7 +66,6 @@ async function scrapeReviews(album, artist) {
         } catch (e) { console.warn("[SCRAPER] SerpAPI failed:", e.message); }
     }
 
-    // Fallback: Google HTML
     const url = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 12000);
@@ -161,4 +159,34 @@ app.post('/a2a/agent', async (req, res) => {
                 // Auto-detect if no "by"
                 if (!artist && album) {
                     const parts = album.split(/\s+/);
-                    artist = parts.pop();
+                    if (parts.length > 1) {
+                        artist = parts.pop();
+                        album = parts.join(' ');
+                    }
+                }
+
+                if (!album || !artist) throw new Error("Could not parse album/artist");
+
+                console.log(`[PARSE] Album: "${album}" | Artist: "${artist}"`);
+
+                const reviews = await scrapeReviews(album, artist);
+                const consensus = await synthesizeConsensus(album, artist, reviews);
+                return consensus;
+            })(),
+
+            new Promise((_, rej) => setTimeout(() => rej(new Error("Timed out")), 25000))
+        ]);
+
+        res.json({ jsonrpc: "2.0", id, result });
+    } catch (e) {
+        console.error("[A2A ERROR]", e.message);
+        res.json({ jsonrpc: "2.0", id, error: { code: -32000, message: e.message } });
+    }
+});
+
+// === START ===
+app.listen(PORT, () => {
+    console.log(`\nSonicCritic LIVE`);
+    console.log(`URL: ${AGENT_BASE_URL}/a2a/agent`);
+    console.log(`telex.im: https://telex.im/ai-coworkers/soniccritic-0bc5e3dfc0e9\n`);
+});
