@@ -1,23 +1,25 @@
+// server.js
 
+// 1. Setup Dependencies and Imports
 import express from 'express';
 import bodyParser from 'body-parser';
 import * as dotenv from 'dotenv';
-import axios from 'axios';
-import * as cheerio from 'cheerio';
-import { GoogleGenAI } from '@google/genai';
+// TEMPORARILY COMMENTING OUT COMPLEX EXTERNAL LIBRARIES FOR STABILITY TEST
+// import axios from 'axios';
+// import * as cheerio from 'cheerio';
+// import { GoogleGenAI } from '@google/genai';
 
 dotenv.config();
 
+// 2. Configuration & Initialization
 const app = express();
 const PORT = process.env.PORT || 3000;
-const AGENT_BASE_URL = process.env.AGENT_BASE_URL; 
+const AGENT_BASE_URL = process.env.AGENT_BASE_URL;
 
-// Initialize Google Gemini Client
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const model = 'gemini-2.5-flash'; 
-
+// Middleware
 app.use(bodyParser.json());
 
+// 3. Agent Configuration (The Agent Card)
 const agentJson = {
     "name": "SonicCritic Agent",
     "description": "Synthesizes top 5 album reviews into critical consensus using Google Gemini.",
@@ -29,161 +31,53 @@ const agentJson = {
     }]
 };
 
+// --- CORE AGENT LOGIC FUNCTIONS ---
+// 🛑 WARNING: Functions are defined but not called in this test version.
+// They will be re-enabled after testing.
 
-/**
- * Searches Google for the top 5 album reviews and scrapes their content.
- * @param {string} album 
- * @param {string} artist 
- * @returns {Promise<Array<string>>} An array of scraped review texts.
- */
-async function scrapeReviews(album, artist) {
-    
-    const reviewTargets = [
-        `https://www.google.com/search?q=${encodeURIComponent(`${album} ${artist} review pitchfork`)}`,
-        `https://www.google.com/search?q=${encodeURIComponent(`${album} ${artist} review nme`)}`,
-        `https://www.google.com/search?q=${encodeURIComponent(`${album} ${artist} review rolling stone`)}`,
-        `https://www.google.com/search?q=${encodeURIComponent(`${album} ${artist} review allmusic`)}`,
-    ];
-
-    const scrapedTexts = [];
-    const scrapePromises = reviewTargets.map(async (url, index) => {
-        try {
-            const response = await axios.get(url, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                },
-                responseType: 'text' 
-            });
-
-            const $ = cheerio.load(response.data);
-            
-            const firstLink = $('div.yuRUbf a').first().attr('href');
-            
-            if (firstLink) {
-                const reviewResponse = await axios.get(firstLink, {
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                    }
-                });
-                const $$ = cheerio.load(reviewResponse.data);
-
-                // 💡 Generic content selectors for common blog/article structure
-                const articleBody = $$('article, .entry-content, .post-content').first().text();
-                
-                // Keep only the first 5000 characters to manage LLM token limits and relevance
-                const cleanedText = articleBody.replace(/\s\s+/g, ' ').trim().substring(0, 5000);
-
-                if (cleanedText.length > 500) { // Only keep reviews with substantial content
-                    scrapedTexts.push(`--- Review from ${firstLink} ---\n${cleanedText}`);
-                }
-            }
-
-        } catch (error) {
-            console.warn(`Could not scrape or fetch review target ${index}: ${url}`, error.message);
-        }
-    });
-
-    await Promise.all(scrapePromises);
-    
-    if (scrapedTexts.length === 0) {
-        throw new Error("Could not find enough substantial reviews to synthesize.");
-    }
-    
-    return scrapedTexts;
-}
+async function scrapeReviews(album, artist) { /* ... original code here ... */ }
+async function synthesizeConsensus(album, artist, reviews) { /* ... original code here ... */ }
 
 
-/**
- * Uses Google Gemini to synthesize the scraped review texts into a consensus.
- * @param {string} album 
- * @param {string} artist 
- * @param {Array<string>} reviews 
- * @returns {Promise<string>} The synthesized critical consensus.
- */
-async function synthesizeConsensus(album, artist, reviews) {
-    const reviewBlock = reviews.join('\n\n====================\n\n');
-    
-    const prompt = `
-        You are SonicCritic, an expert music journalist. Your task is to receive multiple raw, scraped text inputs from different music reviews for the album "${album}" by "${artist}".
+// 4. A2A Required Endpoints (and Protocol Handler)
 
-        Analyze all provided texts. For each review (separated by "====================="), try to extract:
-        1. The source/website (if discernible from the text/URL hint).
-        2. The core argument or central theme of the review.
-        3. The final score, rating, or general sentiment (e.g., 9/10, A-, Essential).
-
-        Finally, write a cohesive, overall **Critical Consensus** in Markdown.
-
-        **OUTPUT FORMAT MUST BE:**
-        
-        **🎵 SonicCritic Consensus for "${album}" by ${artist} 🎵**
-        
-        ### Individual Review Summary
-        
-        * **Source 1:** [Core argument]. **Score:** [Rating]
-        * **Source 2:** [Core argument]. **Score:** [Rating]
-        * ... (List all reviews)
-        
-        ---
-        
-        ### Critical Consensus & Final Verdict
-        
-        [Your final 2-3 paragraph synthesis on the album's reception, highlighting common praise, criticisms, and the overall consensus.]
-        
-        ---
-        
-        **Raw Review Texts to Analyze:**
-        
-        ${reviewBlock}
-    `;
-
-    const response = await ai.models.generateContent({
-        model: model,
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-    });
-
-    return response.text;
-}
-
-
-
+// 4.1. Agent Discovery Endpoint (/.well-known/agent.json)
 app.get('/.well-known/agent.json', (req, res) => {
     res.json(agentJson);
 });
 
+// 4.2. Health Check Endpoint (/healthz)
 app.get('/healthz', (req, res) => {
     res.status(200).send('OK');
 });
 
+// 4.3. Main A2A Communication Endpoint (/a2a/agent)
 app.post('/a2a/agent', async (req, res) => {
     const { jsonrpc, id, method, params } = req.body;
 
-    // --- A2A Protocol Validation ---
-    
-  
+    // ... (A2A Protocol Validation as before) ...
+    // Note: This part handles the initial A2A protocol structure checks correctly.
+
+    // Check 1: Basic JSON-RPC structure check
     if (jsonrpc !== '2.0' || !method || !id || !params) {
         return res.status(200).json({ 
             jsonrpc: "2.0",
             id: id || null,
-            error: {
-                code: -32600,
-                message: "Invalid or malformed JSON-RPC 2.0 request."
-            }
+            error: { code: -32600, message: "Invalid or malformed JSON-RPC 2.0 request." }
         });
     }
 
+    // Check 2: Method (Skill) existence check
     const supportedSkill = agentJson.skills.find(skill => skill.id === method);
     if (!supportedSkill) {
         return res.status(200).json({
             jsonrpc: "2.0",
             id: id,
-            error: {
-                code: -32601,
-                message: `Method not found: ${method}`
-            }
+            error: { code: -32601, message: `Method not found: ${method}` }
         });
     }
 
-    // --- Skill Execution ---
+    // --- Skill Execution (STABILITY TEST VERSION) ---
 
     if (method === 'album_review_synthesizer') {
         try {
@@ -206,38 +100,36 @@ app.post('/a2a/agent', async (req, res) => {
             const album = match[1].trim();
             const artist = match[2].trim();
 
-            console.log(`Starting real process for Album: ${album}, Artist: ${artist}`);
+            console.log(`[DEBUG LOG] Received valid request for Album: ${album}, Artist: ${artist}. Returning MOCK data.`);
             
+            // 🛑 MOCK DATA RESPONSE - THIS REPLACES THE COMPLEX LOGIC
+            const mockResponse = `
+**🎵 SonicCritic Agent - STABILITY TEST SUCCESS! 🎵**
+\nI successfully parsed your request for "${album}" by ${artist}. 
+\nThe issue is NOT in the A2A protocol or basic routing. 
+\nNext, we will re-enable the complex web scraping and Gemini logic.
+`;
 
-            const reviews = await scrapeReviews(album, artist);
-            console.log(`Successfully scraped ${reviews.length} review(s).`);
-
-            const consensus = await synthesizeConsensus(album, artist, reviews);
-
-          
+            // Return the successful JSON-RPC response
             return res.status(200).json({
                 jsonrpc: "2.0",
                 id: id,
-                result: consensus 
+                result: mockResponse 
             });
 
         } catch (error) {
             console.error("Agent Execution Error:", error.message);
-            
-          
+            // Handling internal server error
             return res.status(200).json({
                 jsonrpc: "2.0",
                 id: id,
-                error: {
-                    code: -32603,
-                    message: `Internal server error during skill execution: ${error.message}`
-                }
+                error: { code: -32603, message: `Internal server error during skill execution: ${error.message}` }
             });
         }
     }
 });
 
-
+// 5. Start Server
 app.listen(PORT, () => {
     console.log(`SonicCritic Agent listening on port ${PORT}`);
     console.log(`Base URL is: ${AGENT_BASE_URL}`);
