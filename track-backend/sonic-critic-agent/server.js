@@ -44,11 +44,10 @@ const agentJson = {
  * @returns {Promise<Array<string>>} An array of scraped review texts.
  */
 async function scrapeReviews(album, artist) {
-    // Construct search query for Google
+   
     const searchQuery = `${album} ${artist} album review`;
 
-    // ⚠️ NOTE: For stability, we only search for the main Google results snippet, 
-    // as fetching external review URLs can be slow or blocked.
+    
     const url = `https://www.google.com/search?q=${encodeURIComponent(searchQuery)}`;
     
     try {
@@ -63,11 +62,11 @@ async function scrapeReviews(album, artist) {
         const $ = cheerio.load(response.data);
         const scrapedTexts = [];
 
-        // Selectors targeting organic search result snippets (the brief descriptions)
+        
         $('div.g:lt(4) .VwiC3b, div.g:lt(4) .st, div.g:lt(4) .Uroaid').each((i, element) => {
             const snippet = $(element).text();
             if (snippet && snippet.length > 50) {
-                // Find the associated title (to give the LLM context)
+                
                 const title = $(element).closest('.g').find('h3').text();
                 scrapedTexts.push(`Source Title: ${title || 'Unknown'}\nSnippet: ${snippet}`);
             }
@@ -134,19 +133,17 @@ async function synthesizeConsensus(album, artist, reviews) {
 }
 
 
-// 4. A2A Required Endpoints (and Protocol Handler)
 
-// 4.1. Agent Discovery Endpoint (/.well-known/agent.json)
 app.get('/.well-known/agent.json', (req, res) => {
     res.json(agentJson);
 });
 
-// 4.2. Health Check Endpoint (/healthz)
+
 app.get('/healthz', (req, res) => {
     res.status(200).send('OK');
 });
 
-// 4.3. Main A2A Communication Endpoint (/a2a/agent)
+
 app.post('/a2a/agent', async (req, res) => {
     const { jsonrpc, id, method, params } = req.body;
 
